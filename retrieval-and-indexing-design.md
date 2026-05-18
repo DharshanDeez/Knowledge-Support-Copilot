@@ -239,12 +239,24 @@ Trigger fallback if:
 - no relevant chunks above threshold
 - top chunk scores are low/flat
 - answer contains unsupported claims
+- calibrated band is `low` (or `medium` when policy requires conservative routing)
 
 Fallback response should:
 
 - clearly say confidence is low
 - offer best available cited fragments if safe
 - recommend human escalation path
+
+### 11.3 Confidence Calibration (Required)
+
+Heuristic signals are not sufficient alone. Before production pilot:
+
+1. Run the full pipeline on the labeled eval set (`data/eval/`).
+2. Measure answer correctness vs `confidence_score` and band (see `system-design.md` §12.4).
+3. Tune fusion weights and thresholds until `high` band meets target precision (≥90% correct on eval set; ≤5% high-confidence errors).
+4. Version scorer weights and thresholds in the governance registry.
+
+Log per request: raw signal values, fused `confidence_score`, band, and fallback decision for offline replay and calibration.
 
 ---
 
@@ -263,30 +275,49 @@ This supports trust, auditability, and debugging.
 
 ## 13) Evaluation Framework
 
-### 13.1 Offline Evaluation (before release)
+Canonical detail: `system-design.md` §12. This section covers retrieval-specific evaluation requirements.
+
+### 13.1 Labeled Benchmark Set (Required)
+
+Each eval row must include `question`, `gold_chunk_ids`, `reference_answer` or rubric, `must_cite_chunk_ids`, and `expected_fallback` where the system should not answer confidently.
+
+### 13.2 Offline Evaluation (before release)
 
 Use benchmark set from real user questions.
 
-Primary metrics:
+**Retrieval metrics** (against `gold_chunk_ids`):
 
-- Retrieval Recall@k
+- Recall@k
 - Precision@k
 - MRR (Mean Reciprocal Rank)
-- Grounded answer rate
-- Citation precision
 
-### 13.2 Online Evaluation (after release)
+**Answer metrics** (full RAG output on eval set):
+
+- Groundedness (claims supported by retrieved/cited chunks)
+- Citation precision (cited chunks match required evidence)
+- Answer relevance (vs reference answer or rubric)
+- Grounded answer rate
+
+**Confidence metrics** (join pipeline output with labels):
+
+- Accuracy by confidence band
+- High-confidence error rate
+- Missed-fallback rate (`expected_fallback=true` but system answered `high`)
+
+### 13.3 Online Evaluation (after release)
 
 - helpfulness feedback rate
 - escalation rate by topic
 - unresolved query rate
 - fallback rate trend
+- high-confidence complaints (user flags answer as wrong after `high` band)
 - latency percentiles (p50, p95)
 
-### 13.3 Evaluation Cadence
+### 13.4 Evaluation Cadence
 
-- weekly metric review during pilot
-- monthly threshold tuning after stabilization
+- full offline re-run before every prompt, model, retrieval, or threshold change
+- weekly metric review during pilot (retrieval + answer + calibration slices)
+- monthly threshold and scorer-weight tuning after stabilization
 
 ---
 
@@ -355,7 +386,8 @@ These are baseline defaults and should be tuned with offline and online evaluati
 
 - Final embedding model choice for local and production
 - Re-ranker model choice and latency budget
-- Exact confidence threshold by domain
+- Exact confidence threshold by domain (from calibration, not defaults)
+- Answer judge implementation (NLI vs LLM-as-judge) and human review sample size
 - Citation UI format and length constraints
 - Query rewrite policy by intent class
 - Multi-language strategy timeline

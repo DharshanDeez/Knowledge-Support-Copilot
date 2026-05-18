@@ -20,7 +20,7 @@ It aligns with:
 - deliver reliable query -> retrieval -> answer flow with citations
 - run locally with API-key based LLM provider (Hugging Face)
 - enforce fallback behavior for low confidence
-- capture core logs and evaluation metrics
+- capture core logs and evaluation metrics (retrieval, answer quality, confidence calibration)
 
 ### Future Focus (Not MVP)
 
@@ -97,7 +97,8 @@ It aligns with:
 
 ### Quality Targets
 
-- establish baseline Recall@k and Precision@k
+- establish baseline Recall@k and Precision@k on labeled `gold_chunk_ids`
+- seed labeled eval set (`data/eval/eval_questions.json`) with at least 20 questions before Phase 3
 - verify top-k result relevance manually on sample questions
 
 ### Exit Criteria
@@ -113,7 +114,7 @@ It aligns with:
 
 - grounded answer generation with provider router
 - citation builder and response schema
-- confidence scoring and thresholds
+- confidence scoring and thresholds (log raw signals for calibration)
 - fallback response + escalation path
 
 ### Reliability Controls
@@ -132,15 +133,20 @@ It aligns with:
 
 ### Deliverables
 
-- offline evaluation pipeline
+- labeled eval dataset schema and starter benchmark (`data/eval/`)
+- offline evaluation pipeline:
+  - retrieval metrics (`Recall@k`, `Precision@k`, `MRR`)
+  - answer metrics (`groundedness`, `citation_precision`, `answer_relevance`)
+  - confidence calibration report (accuracy by band, high-confidence error rate, missed fallback)
 - online feedback capture endpoint
-- drift monitoring starter checks
-- core dashboards for latency, fallback, and failures
+- drift monitoring starter checks (including calibration drift)
+- core dashboards for latency, fallback, failures, and confidence-band accuracy
 - alert rules for critical thresholds
 
 ### Exit Criteria
 
-- evaluation report generated from benchmark set
+- evaluation report generated from labeled benchmark set (retrieval + answer + confidence)
+- confidence thresholds tuned so `high` band meets target precision on eval set
 - alerts trigger on simulated threshold breaches
 
 ---
@@ -198,9 +204,12 @@ All changes should go through change notes and release checklist before rollout.
 
 ## 7) MVP Acceptance Gates
 
-- citation coverage `>= 90%`
+- citation coverage `>= 90%` on eval set
 - fallback behavior active and measurable
-- baseline retrieval metrics published (Recall@k, Precision@k)
+- baseline retrieval metrics published (Recall@k, Precision@k, MRR)
+- answer-quality baselines published (groundedness, citation precision, answer relevance)
+- high-confidence error rate `<= 5%` on labeled eval set
+- missed-fallback rate `<= 5%` when `expected_fallback=true`
 - p95 latency tracked and reported
 - critical alerting paths validated
 
@@ -219,6 +228,12 @@ All changes should go through change notes and release checklist before rollout.
 
 - **Risk:** model/config drift  
   **Mitigation:** versioned config registry and periodic eval review
+
+- **Risk:** overconfident wrong answers (confidence says high, answer is wrong)  
+  **Mitigation:** labeled offline eval, confidence calibration, high-confidence error rate gate
+
+- **Risk:** answer metrics not tied to retrieval fixes  
+  **Mitigation:** full-pipeline eval on same benchmark; failure tagging (`weak_retrieval` vs `hallucination`)
 
 ---
 
@@ -240,5 +255,6 @@ Planned after MVP acceptance:
 1. create repo skeleton from approved project structure  
 2. implement Phase 0 foundation setup  
 3. ingest a small real sample corpus  
-4. run first retrieval quality baseline  
-5. review results and tune before Phase 3 generation rollout
+4. create starter labeled eval set (`data/eval/`)  
+5. run first retrieval quality baseline  
+6. review results and tune before Phase 3 generation rollout

@@ -52,8 +52,9 @@ Phase 1 targets to validate business value:
 - Reduce first response time by **40%**
 - Deflect or auto-resolve **25-35%** of repetitive Tier-1 queries
 - Improve first-contact resolution by **10-15%**
-- Maintain citation coverage for **>=90%** of AI answers
-- Keep unsafe-guess rate below **5%** by using fallback/escalation
+- Maintain citation coverage for **>=90%** of AI answers (measured on labeled eval set)
+- Keep unsafe-guess rate below **5%** by using fallback/escalation (measured as **high-confidence error rate** on labeled eval set)
+- Validate **confidence calibration**: when the system reports high confidence, answers are correct on the benchmark at least **90%** of the time
 
 ## 8) Trust, Safety, and Governance Requirements
 
@@ -69,7 +70,10 @@ Phase 1 targets to validate business value:
   **Mitigation:** Content ownership, update SLA, and regular source review
 
 - **Risk:** Hallucinated or weakly grounded answers  
-  **Mitigation:** Retrieval quality checks, citation requirement, confidence gating
+  **Mitigation:** Retrieval quality checks, citation requirement, confidence gating, **offline answer evaluation** (groundedness, citation precision) on a labeled benchmark
+
+- **Risk:** System appears confident but is wrong  
+  **Mitigation:** **Confidence calibration** on labeled data; track high-confidence error rate; tune thresholds before pilot
 
 - **Risk:** Users lose trust after a few bad answers  
   **Mitigation:** Clear citations, transparent fallback messaging, quick handoff
@@ -82,7 +86,7 @@ Phase 1 targets to validate business value:
 ### Stage 1: Local MVP
 
 - Run with local documents and a limited user group
-- Validate answer quality, citation quality, and fallback behavior
+- Validate answer quality, citation quality, fallback behavior, and **confidence calibration** on a labeled eval set (see `system-design.md` §12)
 
 ### Stage 2: Controlled Pilot
 

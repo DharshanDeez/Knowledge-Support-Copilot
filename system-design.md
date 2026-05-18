@@ -341,12 +341,15 @@ This layer enables operational reliability and faster incident response.
 
 The system includes a continuous improvement loop:
 
-- offline evaluation with benchmark question sets
+- offline evaluation with **labeled** benchmark question sets
+- **retrieval metrics** (Recall@k, Precision@k, MRR) on gold chunk IDs
+- **answer-quality metrics** (groundedness, citation precision, answer relevance) scored against labels
+- **confidence calibration** (accuracy by confidence band, high-confidence error rate, threshold tuning)
 - online evaluation from user feedback and escalation signals
-- failure mode analysis (hallucination, weak retrieval, timeout, stale content)
-- controlled tuning and release cycle (prompt, retrieval, threshold updates)
+- failure mode analysis (hallucination, weak retrieval, timeout, stale content, **overconfident wrong answers**)
+- controlled tuning and release cycle (prompt, retrieval, scorer weights, threshold updates)
 
-This layer ensures measurable quality improvement over time.
+This layer ensures measurable quality improvement over time and that the confidence gate is validated, not only implemented.
 
 ### 4.7 Failure Handling Strategy
 
@@ -438,7 +441,7 @@ flowchart TD
    Add confidence thresholds, policy checks, and escalation behavior for low-confidence outputs.
 
 8. **Evaluation baseline**  
-   Run offline benchmark metrics (Recall@k, Precision@k, groundedness, citation quality) and capture starting scores.
+   Run offline benchmark metrics (Recall@k, Precision@k, groundedness, citation quality, answer relevance) on a labeled set; run confidence calibration (accuracy per band, high-confidence error rate); capture starting scores and threshold candidates.
 
 9. **Observability and alerts**  
    Add metrics, traces, and alert rules for latency, failure spikes, fallback spikes, and ingestion backlog.
@@ -447,7 +450,7 @@ flowchart TD
     Finalize timeout, retry with backoff, circuit breaker, and dead-letter queue handling.
 
 11. **MVP readiness gate**  
-    Approve release only if citation coverage, fallback behavior, and latency reporting meet defined targets.
+    Approve release only if citation coverage, fallback behavior, latency reporting, **answer-quality baselines**, and **confidence calibration targets** meet defined thresholds (see [§12](#12-quality-evaluation-framework)).
 
 ### 4.9 Runtime Request Flow (Execution Path)
 
@@ -543,6 +546,8 @@ Use this checklist to confirm the end-to-end flow is implemented correctly.
 - **Ingestion reliability check:** failed ingestion jobs are sent to DLQ with complete error payload and replay option.
 - **Observability check:** logs, metrics, and traces are emitted for every query path.
 - **Evaluation continuity check:** offline and online evaluation metrics are produced and reviewed on schedule.
+- **Answer-quality check:** benchmark answers meet minimum groundedness, citation precision, and relevance scores on the labeled eval set.
+- **Confidence calibration check:** when the system labels a response `high`, correctness on the eval set meets the target precision; high-confidence wrong answers are tracked and below threshold.
 
 ---
 
@@ -647,9 +652,11 @@ flowchart TB
 
 ### 5.8 Safety and Confidence Guard
 
-- Checks evidence strength and answer groundedness
+- Combines retrieval, rerank, coverage, and optional generation self-check into a `confidence_score` and band (`high` / `medium` / `low`)
+- Checks evidence strength and answer groundedness before release
 - Applies policy checks (sensitive topics, unsafe outputs)
 - Triggers fallback response and escalation when confidence is low
+- **Requires offline calibration:** bands and thresholds are tuned on labeled data so `high` correlates with acceptable answer correctness (see [§12.4](#124-confidence-score-evaluation-and-calibration))
 
 ### 5.9 Ingestion Pipeline
 
@@ -984,10 +991,12 @@ flowchart TB
     R2["Answer relevance"]
     R3["Grounding score"]
     R4["Citation precision"]
+    R5["Confidence calibration"]
     B --> R1
     B --> R2
     B --> R3
     B --> R4
+    B --> R5
   end
 
   subgraph online ["After release — online"]
@@ -1006,6 +1015,7 @@ flowchart TB
   R2 --> CR
   R3 --> CR
   R4 --> CR
+  R5 --> CR
   U --> FA
   E --> FA
   D --> FA
@@ -1015,7 +1025,7 @@ flowchart TB
   TUNE -.-> CR
 
   class B,U,E,D,F inputBox
-  class R1,R2,R3,R4,FA metricBox
+  class R1,R2,R3,R4,R5,FA metricBox
   class CR,TUNE actionBox
   style offline fill:#f5f5f5,stroke:#333,stroke-width:2px
   style online fill:#f5f5f5,stroke:#333,stroke-width:2px
@@ -1023,8 +1033,11 @@ flowchart TB
 
 ### Offline Evaluation (before release)
 
-- Curated question set from real support queries
-- Metrics: retrieval recall, answer relevance, grounding score, citation precision
+- Curated **labeled** question set from real support queries (see [§12.2](#122-labeled-evaluation-dataset))
+- **Retrieval metrics:** Recall@k, Precision@k, MRR against `gold_chunk_ids`
+- **Answer metrics:** groundedness, citation precision, answer relevance (see [§12.3](#123-answer-quality-evaluation-ml--human))
+- **Confidence metrics:** calibration error, accuracy by band, high-confidence error rate (see [§12.4](#124-confidence-score-evaluation-and-calibration))
+- **Release gates:** minimum scores per metric before prompt/model/threshold changes ship
 
 ### Online Evaluation (after release)
 
@@ -1032,6 +1045,78 @@ flowchart TB
 - Escalation rate by topic
 - Deflection quality (resolved vs merely deflected)
 - Drift detection for content freshness and model behavior
+- **Calibration drift:** rising high-confidence error rate or fallback spike by topic
+- Periodic re-run of offline benchmark on production-like config
+
+### 12.2 Labeled Evaluation Dataset
+
+Each benchmark row should include at minimum:
+
+| Field | Purpose |
+|-------|---------|
+| `question_id` | Stable key for regression tracking |
+| `question` | User-style query |
+| `gold_chunk_ids` | Expected evidence in top-k / final context |
+| `reference_answer` or `acceptance_rubric` | Human or SME label for correctness |
+| `must_cite_chunk_ids` | Required citations for citation-precision scoring |
+| `topic` / `difficulty` | Slice metrics and failure analysis |
+| `expected_fallback` | `true` when the system should not answer confidently |
+
+Store under `data/eval/` (see `project-structure.md`). Start with **50–100** real support questions for MVP; grow with pilot feedback.
+
+### 12.3 Answer Quality Evaluation (ML + Human)
+
+Answer quality must be scored on the labeled set **before** trusting production confidence bands.
+
+| Metric | Definition | MVP scoring approach |
+|--------|------------|----------------------|
+| **Groundedness** | Claims in the answer are supported by retrieved chunks | NLI/entailment against cited chunks, or LLM-as-judge with human spot-check on a sample |
+| **Citation precision** | Cited chunks support the answer | Overlap of `cited_chunk_ids` with `must_cite_chunk_ids` + snippet relevance check |
+| **Answer relevance** | Answer addresses the question | Semantic similarity to `reference_answer`, or rubric-based judge score |
+| **Grounded answer rate** | % of eval rows passing groundedness + citation checks | Aggregate over benchmark run |
+| **Failure tags** | `hallucination`, `weak_retrieval`, `wrong_citation`, `incomplete`, `should_have_fallback` | Manual or automated triage for tuning |
+
+**Human-in-the-loop (required for MVP):**
+
+- SME review of **all** benchmark rows once labels exist
+- Weekly spot-check of **10–20** live answers during pilot
+- Any change to prompt, model, retrieval config, or confidence weights triggers a full offline re-run
+
+### 12.4 Confidence Score Evaluation and Calibration
+
+Runtime confidence is a **routing signal**; it must be validated against labeled correctness.
+
+| Metric | Definition | MVP target (starting point) |
+|--------|------------|----------------------------|
+| **Accuracy by band** | % correct when band = high / medium / low | `high` ≥ **90%** correct on eval set |
+| **High-confidence error rate** | Wrong answers when band = `high` | ≤ **5%** (aligns with `problem-framing.md` unsafe-guess target) |
+| **Calibration gap** | Difference between mean confidence and actual accuracy | Track; reduce via threshold tuning |
+| **False comfort** | `high` band + failed groundedness or relevance | Count and block release if above threshold |
+| **Missed fallback** | Should have fallen back (`expected_fallback=true`) but answered confidently | ≤ **5%** on eval set |
+
+**Calibration workflow:**
+
+1. Run full pipeline on labeled set; record `confidence_score`, band, and all scorer inputs.
+2. Join with answer-quality labels (correct / partial / wrong).
+3. Plot accuracy by band; adjust `thresholds.py` until `high` meets precision target.
+4. Version thresholds in governance registry; re-calibrate after model or retrieval changes.
+
+### 12.5 Evaluation Cadence and Release Gates
+
+| When | Action |
+|------|--------|
+| Before MVP demo | Full offline report: retrieval + answer + confidence |
+| Every config change | Re-run `scripts/run_eval_offline.py`; compare to baseline |
+| Pilot (weekly) | Review online feedback, escalation, calibration drift |
+| Production (monthly) | Refresh benchmark set; re-tune thresholds |
+
+**MVP release gates (minimum):**
+
+- Retrieval Recall@k and Precision@k published on eval set
+- Grounded answer rate ≥ agreed baseline (set after first run)
+- Citation precision ≥ **90%** on eval set
+- High-confidence error rate ≤ **5%**
+- Missed-fallback rate ≤ **5%**
 
 ---
 
@@ -1055,7 +1140,8 @@ flowchart LR
 ### Stage 1: Build and Validate Locally
 
 - Implement ingestion, retrieval, generation, citations, and fallback
-- Run offline eval and tune chunking/retrieval parameters
+- Build labeled eval set and run offline retrieval + answer + confidence calibration
+- Tune chunking, retrieval, scorer weights, and thresholds from eval report
 
 ### Stage 2: Controlled Pilot
 
@@ -1073,7 +1159,8 @@ flowchart LR
 
 - Final model choice for local and production
 - Vector DB choice for cloud production
-- Exact confidence threshold policy per domain
+- Exact confidence threshold policy per domain (tune via [§12.4](#124-confidence-score-evaluation-and-calibration), not guesswork)
+- Answer judge method for production (NLI vs LLM-as-judge vs human-only) and review SLA
 - Escalation integration target (ticketing/chat system)
 - Data refresh SLA by source type
 - Ownership model for knowledge quality and incident response
@@ -1092,4 +1179,4 @@ This design creates a practical path from local MVP to production-grade deployme
 | Trust | Citations on every confident response |
 | Safety | Confidence gate + human handoff when unsure |
 | Operability | Logs, metrics, traces, and SLOs from day one |
-| Evolution | Offline + online evaluation driving controlled tuning |
+| Evolution | Labeled offline eval (retrieval + answers + confidence calibration) + online feedback |

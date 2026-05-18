@@ -102,11 +102,19 @@ simple-rag/
     eval/
       datasets/
         eval_questions.json
+        README.md
+      labels/
+        human_labels.json
       offline/
         retrieval_metrics.py
+        answer_scorer.py
         grounding_checks.py
+        citation_checks.py
+        confidence_calibration.py
+        eval_report.py
       online/
         feedback_analytics.py
+        calibration_drift.py
       drift/
         drift_monitor.py
 
@@ -145,6 +153,7 @@ simple-rag/
   scripts/
     run_ingestion.py
     run_eval_offline.py
+    run_eval_calibration.py
     run_eval_online_report.py
     reindex.py
 
@@ -158,6 +167,9 @@ simple-rag/
     processed/
     index/
     eval/
+      eval_questions.json
+      eval_runs/
+      calibration_reports/
     dlq/
 
   .env.example
@@ -207,8 +219,12 @@ simple-rag/
 
 ### Evaluation
 
-- offline metrics (Recall@k, Precision@k, MRR, groundedness)
-- online quality and drift tracking
+- labeled benchmark schema (`question`, `gold_chunk_ids`, `reference_answer`, `must_cite_chunk_ids`, `expected_fallback`)
+- offline retrieval metrics (Recall@k, Precision@k, MRR)
+- offline answer metrics (groundedness, citation precision, answer relevance)
+- offline confidence calibration (accuracy by band, high-confidence error rate, missed fallback)
+- online quality, feedback analytics, and calibration drift tracking
+- eval report artifact per run under `data/eval/eval_runs/`
 
 ### Observability
 
